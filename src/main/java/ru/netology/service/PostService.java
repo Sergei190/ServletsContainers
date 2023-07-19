@@ -17,15 +17,16 @@ public class PostService {
         return repository.all();
     }
 
-    public Post getById(long id) {
-        return repository.getById(id).orElseThrow(NotFoundException::new);
+    public Post getById(long id) throws NotFoundException {
+        return repository.getById(id)
+                .orElseThrow(() -> new NotFoundException("Post with id %d not found".formatted(id)));
     }
 
-    public Post save(Post post) {
+    public Post save(Post post) throws NotFoundException {
         return repository.save(post);
     }
 
-    public void removeById(long id) {
+    public void removeById(long id) throws NotFoundException {
         repository.removeById(id);
     }
 }
