@@ -1,65 +1,101 @@
 package ru.netology.servlet;
 
-import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import ru.netology.controller.PostController;
+import ru.netology.exception.NotFoundException;
+import ru.netology.exception.UnsupportedMethodException;
+import ru.netology.handler.HandlerKeyPair;
 import ru.netology.repository.PostRepository;
+import ru.netology.repository.PostRepositoryImpl;
 import ru.netology.service.PostService;
 
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-
-//инициализирует все необходимые объекты
-//диспетчеризация запросов
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 public class MainServlet extends HttpServlet {
-    public static final String API_POSTS_D = "/api/posts/\\d+";
-    public static final String POSTS = "/api/posts";
     private PostController controller;
+    private Map< String, List<HandlerKeyPair>> routerMap;
 
     @Override
     public void init() {
-        //инициализируем необходимые сущности
-        //отдаём список пакетов, в которых необходимо искать аннотационные классы
-        AnnotationConfigApplicationContext configApplicationContext = new AnnotationConfigApplicationContext("ru.netology.servlet");//передаем пакет, в котором необходимо искать бины
-        //получаем по классу бина
-        controller = configApplicationContext.getBean(PostController.class);
-        final PostRepository repository = configApplicationContext.getBean(PostRepository.class);
-        final PostService service = configApplicationContext.getBean(PostService.class);
+        final PostRepository repository = new PostRepositoryImpl();
+        final var service = new PostService(repository);
+        controller = new PostController(service);
+
+        initRouterMap();
+    }
+
+    public void initRouterMap() {
+        routerMap = new HashMap<>();
+        routerMap.put("GET", new ArrayList<>(
+                List.of(
+                        new HandlerKeyPair(
+                                "/api/posts",
+                                (req, res) -> controller.all(res)
+                        ),
+                        new HandlerKeyPair(
+                                "/api/posts/\\d+",
+                                (req, res) -> {
+                                    final var path = req.getRequestURI();
+                                    final var id = parseIdFromPath(path);
+                                    controller.getById(id, res);
+                                }
+                        )
+                )
+        ));
+        routerMap.put("POST", new ArrayList<>(
+                List.of(
+                        new HandlerKeyPair(
+                                "/api/posts",
+                                (req, res) -> controller.save(req.getReader(), res)
+                        )
+                )
+        ));
+        routerMap.put("DELETE", new ArrayList<>(
+                List.of(
+                        new HandlerKeyPair(
+                                "/api/posts/\\d+",
+                                (req, res) -> {
+                                    final var path = req.getRequestURI();
+                                    final var id = parseIdFromPath(path);
+                                    controller.removeById(id, res);
+                                }
+                        )
+                )
+        ));
+    }
+
+    private long parseIdFromPath(String path) {
+        return Long.parseLong(path.substring(path.lastIndexOf("/") + 1));
     }
 
     @Override
-    protected void service(HttpServletRequest req, HttpServletResponse resp) {
-        // если деплоились в root context, то достаточно этого
+    protected void service(HttpServletRequest req, HttpServletResponse res) throws IOException {
         try {
-            final String path = req.getRequestURI();
-            final String method = req.getMethod();
-            final long id = Long.parseLong(path.substring(path.lastIndexOf("/")));
+            final var path = req.getRequestURI();
+            final var method = req.getMethod();
 
-            // primitive routing
-            if (method.equals("GET") && path.equals(POSTS)) {
-                controller.all(resp);
-                return;
-            }
+            final var handlerKeyPairs = routerMap.get(method);
 
-            if (method.equals("GET") && path.matches(API_POSTS_D)) {
-                // easy way
-                controller.getById(id, resp);
-                return;
-            }
-            if (method.equals("POST") && path.equals(POSTS)) {
-                controller.save(req.getReader(), resp);
-                return;
-            }
-            if (method.equals("DELETE") && path.matches(API_POSTS_D)) {
-                // easy way
-                controller.removeById(id, resp);
-                return;
-            }
-            resp.setStatus(HttpServletResponse.SC_NOT_FOUND);
+            handlerKeyPairs.stream().
+                    filter(pair -> path.matches(pair.getFirst())).
+                    findFirst()
+                    .orElseThrow(UnsupportedMethodException::new)
+                    .getSecond()
+                    .handle(req, res);
+
+        } catch (UnsupportedMethodException | NotFoundException e) {
+            res.setContentType(PostController.APPLICATION_JSON);
+            res.setStatus(HttpServletResponse.SC_NOT_FOUND);
+            res.getWriter().print("{ \"errorMessage\" : \"%s\" }".formatted(e.getMessage()));
         } catch (Exception e) {
             e.printStackTrace();
-            resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            res.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
     }
 }
